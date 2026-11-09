@@ -1,5 +1,8 @@
 package co.umariana.dao;
 
+import co.umariana.modelo.Persona;
+import java.sql.Types;
+
 import co.umariana.conexion.ConexionBD;
 import co.umariana.modelo.ArbolGenealogico;
 import co.umariana.modelo.ResumenArbol;
@@ -53,7 +56,25 @@ public class ArbolDAO {
         //   luego, por cada miembro: INSERT INTO miembros (arbol_id, posicion, nombre, nacimiento, fallecimiento)
         //   VALUES (?, ?, ?, ?, ?)  (fallecimiento null -> ps.setNull(5, java.sql.Types.INTEGER));
         //   commit; si hay un SQLException: rollback y devuelva -1.
-        throw new UnsupportedOperationException("TODO: guardar");
+        if (nombre == null || nombre.isBlank() || nombre.length() > 100 || arbol == null) {
+            return -1;
+        }
+        return enTransaccion(con -> {
+            long id;
+            String sql = "INSERT INTO arboles (nombre) VALUES (?)";
+            try (PreparedStatement ps = con.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                ps.setString(1, nombre);
+                ps.executeUpdate();
+                try (ResultSet claves = ps.getGeneratedKeys()) {
+                    if (!claves.next()) {
+                        throw new SQLException("La base de datos no devolvió el ID del árbol.");
+                    }
+                    id = claves.getLong(1);
+                }
+            }
+            insertarMiembros(con, id, arbol);
+            return id;
+        }, -1L);
     }
 
     // =====================================================================
@@ -70,7 +91,24 @@ public class ArbolDAO {
         //                 GROUP BY a.id, a.nombre, a.creado ORDER BY a.id
         //   (el LEFT JOIN hace que aparezcan también los árboles sin miembros, con total 0).
         //   Para la fecha use rs.getTimestamp("creado").toLocalDateTime().
-        throw new UnsupportedOperationException("TODO: listar");
+        String sql = """
+                SELECT a.id, a.nombre, a.creado, COUNT(m.id) AS total
+                FROM arboles a LEFT JOIN miembros m ON m.arbol_id = a.id
+                GROUP BY a.id, a.nombre, a.creado ORDER BY a.id
+                """;
+        List<ResumenArbol> arboles = new ArrayList<>();
+        try (Connection con = ConexionBD.conectar();
+                PreparedStatement ps = con.prepareStatement(sql);
+                ResultSet filas = ps.executeQuery()) {
+            while (filas.next()) {
+                arboles.add(new ResumenArbol(filas.getLong("id"), filas.getString("nombre"),
+                        filas.getInt("total"), filas.getTimestamp("creado").toLocalDateTime()));
+            }
+            return arboles;
+        } catch (SQLException error) {
+            System.out.println(error.getMessage());
+            return new ArrayList<>();
+        }
     }
 
     // =====================================================================
@@ -86,7 +124,27 @@ public class ArbolDAO {
         //   La primera fila es el sujeto: new ArbolGenealogico(sujeto); las demás: arbol.agregar(persona).
         //   Para leer un entero que puede ser NULL: int f = rs.getInt("fallecimiento"); y luego rs.wasNull().
         //   Si no hay filas, el árbol no existe (devuelva null).
-        throw new UnsupportedOperationException("TODO: cargar");
+        String sql = """
+                SELECT posicion, nombre, nacimiento, fallecimiento
+                FROM miembros WHERE arbol_id = ? ORDER BY id
+                """;
+        try (Connection con = ConexionBD.conectar();
+                PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            try (ResultSet filas = ps.executeQuery()) {
+                if (!filas.next()) {
+                    return null;
+                }
+                ArbolGenealogico arbol = new ArbolGenealogico(leerPersona(filas));
+                while (filas.next()) {
+                    arbol.agregar(leerPersona(filas));
+                }
+                return arbol;
+            }
+        } catch (SQLException | IllegalArgumentException error) {
+            System.out.println(error.getMessage());
+            return null;
+        }
     }
 
     // =====================================================================
@@ -103,7 +161,25 @@ public class ArbolDAO {
     public boolean actualizar(long id, ArbolGenealogico arbol) {
         // TODO Etapa 4.4: en una transacción: compruebe que el árbol existe (SELECT id FROM arboles WHERE id = ?),
         //   DELETE FROM miembros WHERE arbol_id = ?  y vuelva a insertar los miembros de arbol.miembros().
-        throw new UnsupportedOperationException("TODO: actualizar");
+        if (arbol == null) {
+            return false;
+        }
+        return enTransaccion(con -> {
+            try (PreparedStatement ps = con.prepareStatement("SELECT id FROM arboles WHERE id = ? FOR UPDATE")) {
+                ps.setLong(1, id);
+                try (ResultSet filas = ps.executeQuery()) {
+                    if (!filas.next()) {
+                        return false;
+                    }
+                }
+            }
+            try (PreparedStatement ps = con.prepareStatement("DELETE FROM miembros WHERE arbol_id = ?")) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
+            insertarMiembros(con, id, arbol);
+            return true;
+        }, false);
     }
 
     // =====================================================================
@@ -117,6 +193,71 @@ public class ArbolDAO {
      */
     public boolean eliminar(long id) {
         // TODO Etapa 4.5: DELETE FROM arboles WHERE id = ?
-        throw new UnsupportedOperationException("TODO: eliminar");
+        try (Connection con = ConexionBD.conectar();
+                PreparedStatement ps = con.prepareStatement("DELETE FROM arboles WHERE id = ?")) {
+            ps.setLong(1, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException error) {
+            System.out.println(error.getMessage());
+            return false;
+        }
+    }
+
+    private static Persona leerPersona(ResultSet fila) throws SQLException {
+        int valor = fila.getInt("fallecimiento");
+        Integer fallecimiento = fila.wasNull() ? null : valor;
+        return new Persona(fila.getString("posicion"), fila.getString("nombre"),
+                fila.getInt("nacimiento"), fallecimiento);
+    }
+
+    private static void insertarMiembros(Connection con, long id, ArbolGenealogico arbol) throws SQLException {
+        String sql = """
+                INSERT INTO miembros (arbol_id, posicion, nombre, nacimiento, fallecimiento)
+                VALUES (?, ?, ?, ?, ?)
+                """;
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            for (Persona persona : arbol.miembros()) {
+                ps.setLong(1, id);
+                ps.setString(2, persona.getPosicion());
+                ps.setString(3, persona.getNombre());
+                ps.setInt(4, persona.getNacimiento());
+                Integer fallecimiento = persona.getFallecimiento();
+                if (fallecimiento == null) {
+                    ps.setNull(5, Types.INTEGER);
+                } else {
+                    ps.setInt(5, fallecimiento);
+                }
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface Operacion<T> {
+        T ejecutar(Connection con) throws SQLException;
+    }
+
+    private static <T> T enTransaccion(Operacion<T> operacion, T valorDeError) {
+        try (Connection con = ConexionBD.conectar()) {
+            con.setAutoCommit(false);
+            try {
+                T resultado = operacion.ejecutar(con);
+                con.commit();
+                con.setAutoCommit(true);
+                return resultado;
+            } catch (SQLException | RuntimeException error) {
+                try {
+                    con.rollback();
+                } catch (SQLException falloRollback) {
+                    error.addSuppressed(falloRollback);
+                    throw error;
+                }
+                con.setAutoCommit(true);
+                throw error;
+            }
+        } catch (SQLException error) {
+            System.out.println(error.getMessage());
+            return valorDeError;
+        }
     }
 }
