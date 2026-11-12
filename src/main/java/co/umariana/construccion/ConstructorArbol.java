@@ -1,5 +1,13 @@
 package co.umariana.construccion;
 
+import co.umariana.modelo.Persona;
+import co.umariana.modelo.Posicion;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import co.umariana.modelo.ArbolGenealogico;
 import co.umariana.modelo.ArbolInvalidoException;
 
@@ -52,6 +60,76 @@ public final class ConstructorArbol {
      */
     public static ArbolGenealogico construir(String texto) {
         // TODO Etapa 3
-        throw new UnsupportedOperationException("TODO: construir");
+        if (texto == null || texto.isBlank()) {
+            throw new ArbolInvalidoException("El texto está vacío.");
+        }
+
+        List<Entrada> familiares = new ArrayList<>();
+        Set<String> posiciones = new HashSet<>();
+        Persona sujeto = null;
+        String[] lineas = texto.split("\\r?\\n");
+        for (int i = 0; i < lineas.length; i++) {
+            if (lineas[i].isBlank()) {
+                continue;
+            }
+            try {
+                Persona persona = leerPersona(lineas[i]);
+                String posicion = persona.getPosicion();
+                if (!posiciones.add(posicion)) {
+                    throw new ArbolInvalidoException("La posición " + posicion + " está repetida.");
+                }
+                if (Posicion.esSujeto(posicion)) {
+                    sujeto = persona;
+                } else {
+                    familiares.add(new Entrada(i + 1, persona));
+                }
+            } catch (IllegalArgumentException error) {
+                throw errorDeLinea(i + 1, error);
+            }
+        }
+        if (sujeto == null) {
+            throw new ArbolInvalidoException("Falta el sujeto en la posición 1.");
+        }
+
+        familiares.sort(Comparator.comparingInt(entrada ->
+                Posicion.generacion(entrada.persona().getPosicion())));
+        ArbolGenealogico arbol = new ArbolGenealogico(sujeto);
+        for (Entrada entrada : familiares) {
+            try {
+                arbol.agregar(entrada.persona());
+            } catch (IllegalArgumentException error) {
+                throw errorDeLinea(entrada.linea(), error);
+            }
+        }
+        return arbol;
+    }
+
+    private record Entrada(int linea, Persona persona) {}
+
+    private static Persona leerPersona(String linea) {
+        String[] campos = linea.split(";", -1);
+        if (campos.length < 3 || campos.length > 4) {
+            throw new ArbolInvalidoException("Se esperaban 3 o 4 campos separados por punto y coma.");
+        }
+        int nacimiento = leerAnio(campos[2].trim(), "nacimiento");
+        Integer fallecimiento = null;
+        if (campos.length == 4 && !campos[3].trim().isEmpty()) {
+            fallecimiento = leerAnio(campos[3].trim(), "fallecimiento");
+        }
+        Persona persona = new Persona(campos[0].trim(), campos[1].trim(), nacimiento, fallecimiento);
+        persona.validar();
+        return persona;
+    }
+
+    private static int leerAnio(String valor, String campo) {
+        try {
+            return Integer.parseInt(valor);
+        } catch (NumberFormatException error) {
+            throw new ArbolInvalidoException("El año de " + campo + " debe ser un entero.");
+        }
+    }
+
+    private static ArbolInvalidoException errorDeLinea(int linea, IllegalArgumentException error) {
+        return new ArbolInvalidoException("Línea " + linea + ": " + error.getMessage());
     }
 }

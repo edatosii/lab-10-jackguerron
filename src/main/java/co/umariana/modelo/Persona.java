@@ -42,7 +42,24 @@ public class Persona {
      */
     public void validar() {
         // TODO Etapa 1
-        throw new UnsupportedOperationException("TODO: validar");
+        if (!Posicion.esValida(posicion)) {
+            throw new IllegalArgumentException("Posición inválida: " + posicion);
+        }
+        if (nombre == null || nombre.isBlank()) {
+            throw new IllegalArgumentException("El nombre es obligatorio.");
+        }
+        if (nombre.length() > MAX_NOMBRE) {
+            throw new IllegalArgumentException("El nombre supera los 100 caracteres.");
+        }
+        if (nombre.indexOf(';') >= 0 || nombre.indexOf('\r') >= 0 || nombre.indexOf('\n') >= 0) {
+            throw new IllegalArgumentException("El nombre contiene un separador o salto de línea.");
+        }
+        if (nacimiento <= 0) {
+            throw new IllegalArgumentException("El nacimiento debe ser mayor que cero.");
+        }
+        if (fallecimiento != null && fallecimiento < nacimiento) {
+            throw new IllegalArgumentException("El fallecimiento es anterior al nacimiento.");
+        }
     }
 
     public String getPosicion() { return posicion; }
